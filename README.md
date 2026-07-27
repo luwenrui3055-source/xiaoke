@@ -17,7 +17,7 @@ xiaoke is shared infrastructure, not a persona or prompt manager.
 
 - OpenAI-compatible `/v1/chat/completions` gateway.
 - Local SQLite Timeline with monotonic ordering and durable storage.
-- Rolling shared context: old records can leave the injection budget without being deleted from the database.
+- **Combined rolling shared context:** the client history and xiaoke-injected Timeline records share one record limit, so the gateway fills only the gap instead of adding a second full history window. Old records can leave this window without being deleted from the database.
 - A handoff remains continuous after the first message: later turns in the same identified window rebuild the needed baseline rather than forgetting it on the second or third reply.
 - Successful user/assistant turns are committed together. Failed, disconnected, or incomplete streaming replies do not enter the Timeline.
 - Unknown OpenAI-compatible request options, including tool schemas, are forwarded upstream. Tool-call chains are not written as normal Timeline conversation records.
@@ -47,7 +47,19 @@ python xiaoke_app.py
 
 Set a long random `XIAOKE_API_KEY` and configure your client to use the gateway's `/v1` base URL. Configure an OpenAI-compatible upstream in `.env`.
 
-See [`.env.example`](.env.example) for all settings. In particular, `MAX_HANDOFF_RECORDS` and `MAX_HANDOFF_CHARS` limit context injection; they do not delete Timeline records.
+See [`.env.example`](.env.example) for all settings. In particular, `MAX_HANDOFF_RECORDS` is the **total combined record limit** for ordinary client conversation records plus xiaoke-selected Timeline records; it is not “an additional number of records to inject.” `MAX_HANDOFF_CHARS` is a secondary character safety cap for xiaoke-selected records. Neither setting deletes Timeline records.
+
+### Combined rolling-window example
+
+With `MAX_HANDOFF_RECORDS=3`, assume the durable Timeline is `1 2 3 4 5`:
+
+```text
+client sends: 4       → xiaoke supplies: 2 3   → model receives: 2 3 4
+client sends: 4 5     → xiaoke supplies: 3     → model receives: 3 4 5
+client sends: 4 5 6   → xiaoke supplies: none  → model receives: 4 5 6
+```
+
+xiaoke counts ordinary client `user`/`assistant` messages first, then fills the remaining slots with the newest eligible Timeline records not already represented in that request. Explicit Timeline events are eligible shared records: when selected they are forwarded to the model and consume one of the remaining shared-window slots. System messages, tool calls, and tool results remain in the client request but do not consume this shared Timeline record limit.
 
 ## Shared Timeline viewer
 

@@ -39,8 +39,8 @@ with tempfile.TemporaryDirectory() as directory:
     ]
 
     ordinary_assembled, ordinary_injected = assemble(second_request, store)
-    assert ordinary_injected == []
-    assert not any("蓝色雨伞" in str(message["content"]) for message in ordinary_assembled)
+    assert [record.sequence for record in ordinary_injected] == [1, 2]
+    assert any("蓝色雨伞" in str(message["content"]) for message in ordinary_assembled)
 
     # The session's saved baseline restores the pre-handoff fact on turn two.
     sustained = registry.baseline_for(second_request)

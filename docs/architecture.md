@@ -10,9 +10,10 @@ System prompts and persona text are not stored in the Timeline and are not copie
 
 1. A client sends an OpenAI-compatible chat-completions request with the xiaoke Bearer key.
 2. xiaoke identifies the source as optional metadata and identifies the conversation window when a stable window ID is available.
-3. It examines the client-supplied history for a shared Timeline anchor.
-4. If the window needs missing context, xiaoke selects a recent, bounded role-preserving slice of eligible Timeline records. It excludes records already supplied by the client.
-5. xiaoke sends the assembled request to the upstream model. Except for rebuilt `messages`, `model`, and `stream`, compatible request options are preserved for forwarding.
+3. It counts ordinary `user`/`assistant` messages already supplied by the client and examines the history for Timeline overlap.
+4. `MAX_HANDOFF_RECORDS` is a combined rolling-window limit: xiaoke selects only enough recent eligible Timeline records not already supplied by the client to fill the remaining slots. It is not an extra injection allowance.
+5. Explicit Timeline events are eligible selected records. They are rendered as assistant-context messages for the upstream model and consume a remaining combined-window slot.
+6. xiaoke sends the assembled request to the upstream model. Except for rebuilt `messages`, `model`, and `stream`, compatible request options are preserved for forwarding.
 6. Only after a complete successful assistant response does xiaoke transactionally store the current eligible user/assistant text turn.
 
 ## Storage and ordering
@@ -27,7 +28,9 @@ Timeline records are retained until an operator explicitly deletes them. Leaving
 
 Handoff records are normal role-preserving messages, not a synthetic replacement system prompt. A frontend's own system messages remain first; selected shared records are placed before that frontend's current messages.
 
-A newly handed-off window receives a server-side continuity baseline. Subsequent requests in that identified window rebuild that baseline under the current budget. This is necessary because most clients do not return invisible gateway-injected messages in their next API request.
+A newly handed-off window receives a server-side continuity baseline. Subsequent requests in that identified window rebuild the current combined rolling window, not a second full history beside the client history. This is necessary because most clients do not return invisible gateway-injected messages in their next API request.
+
+For example, with a limit of 3, client history `4` is filled with Timeline `2, 3` to form `2, 3, 4`; when the next request carries `4, 5`, xiaoke supplies only `3`, producing `3, 4, 5`. Once the client itself supplies 3 ordinary conversation records, xiaoke supplies no additional Timeline records. System messages, tool calls, and tool results do not consume this shared record limit. Selected explicit Timeline events do consume a slot and are forwarded upstream.
 
 See [Continuity and window identity](continuity-and-window-identity.md) for operational requirements and fallback limitations.
 

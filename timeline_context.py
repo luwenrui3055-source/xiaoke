@@ -113,41 +113,60 @@ def needs_handoff(client_messages: Iterable[dict[str, Any]], records: Iterable[T
     return anchor is None or anchor < latest, anchor
 
 
-def handoff_records(client_messages: Iterable[dict[str, Any]], records: Iterable[TimelineRecord], max_records: int = 999, max_chars: int = 160000) -> list[TimelineRecord]:
-    """Select only history missing from this request, newest-first by budget.
+def client_conversation_messages(messages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Count only ordinary user/assistant chat messages toward the shared window.
 
-    Returned records are chronological. `max_chars` is a safe temporary stand-in
-    for tokenizer-aware budgeting; the gateway stage will reserve actual SP/input/
-    output budget before calling this selector.
+    System messages, tool calls/results and app wrappers remain the frontend's
+    own request material. They are deliberately not counted against the shared
+    timeline record limit.
     """
-    usable = sorted((r for r in records if r.eligible), key=lambda r: r.sequence)
-    required, anchor = needs_handoff(client_messages, usable)
-    if not required:
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role", ""))
+        if role not in {"user", "assistant"} or message.get("tool_calls"):
+            continue
+        if text_from_content(message.get("content")):
+            result.append(message)
+    return result
+
+
+def combined_window_records(client_messages: Iterable[dict[str, Any]], records: Iterable[TimelineRecord], max_records: int = 999, max_chars: int = 160000) -> list[TimelineRecord]:
+    """Fill a combined rolling conversation window to ``max_records``.
+
+    ``max_records`` is the total shared conversation-record limit, not an
+    additional injection allowance. The frontend's existing ordinary
+    user/assistant messages take their places first; xiaoke contributes only
+    the newest timeline records absent from that request needed to fill the
+    remaining slots. Returned records are chronological and storage is never
+    mutated.
+    """
+    client = list(client_messages)
+    remaining = max(0, max_records - len(client_conversation_messages(client)))
+    if remaining == 0:
         return []
 
-    client_fps = {fingerprint(str(m.get("role", "")), m.get("content")) for m in client_eligible_messages(client_messages)}
-    candidates = [r for r in usable if (anchor is None or r.sequence > anchor) and fingerprint(r.role, r.content) not in client_fps]
-    selected: list[TimelineRecord] = []
-    used_chars = 0
-    for record in reversed(candidates):
-        size = len(record.content)
-        if len(selected) >= max_records or used_chars + size > max_chars:
-            break
-        selected.append(record)
-        used_chars += size
-    return list(reversed(selected))
-
-def rolling_records(client_messages: Iterable[dict[str, Any]], records: Iterable[TimelineRecord], max_records: int = 999, max_chars: int = 160000) -> list[TimelineRecord]:
-    """Rebuild a bounded, newest-first context window without mutating storage."""
     usable = sorted((record for record in records if record.eligible), key=lambda record: record.sequence)
-    client_fps = {fingerprint(str(message.get("role", "")), message.get("content")) for message in client_eligible_messages(client_messages)}
+    client_fps = {
+        fingerprint(str(message.get("role", "")), message.get("content"))
+        for message in client_eligible_messages(client)
+    }
     candidates = [record for record in usable if fingerprint(record.role, record.content) not in client_fps]
     selected: list[TimelineRecord] = []
     used_chars = 0
     for record in reversed(candidates):
         size = len(record.content)
-        if len(selected) >= max_records or used_chars + size > max_chars:
+        if len(selected) >= remaining or used_chars + size > max_chars:
             break
         selected.append(record)
         used_chars += size
     return list(reversed(selected))
+
+
+def handoff_records(client_messages: Iterable[dict[str, Any]], records: Iterable[TimelineRecord], max_records: int = 999, max_chars: int = 160000) -> list[TimelineRecord]:
+    """Compatibility name for the combined rolling-window selector."""
+    return combined_window_records(client_messages, records, max_records, max_chars)
+
+
+def rolling_records(client_messages: Iterable[dict[str, Any]], records: Iterable[TimelineRecord], max_records: int = 999, max_chars: int = 160000) -> list[TimelineRecord]:
+    """Compatibility name for the combined rolling-window selector."""
+    return combined_window_records(client_messages, records, max_records, max_chars)

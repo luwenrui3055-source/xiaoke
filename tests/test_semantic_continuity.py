@@ -32,8 +32,8 @@ with tempfile.TemporaryDirectory() as directory:
         {"role": "user", "content": question},
     ]
     one_shot, injected = assemble(second, store)
-    assert injected == []
-    assert answer(one_shot) == "我不知道"
+    assert [record.sequence for record in injected] == [1, 2]
+    assert answer(one_shot) == "蓝色"
     registry = ContinuityRegistry()
     registry.create(baseline, "哥哥，我下午有安排吗？", first_reply)
     sustained = registry.baseline_for(second)

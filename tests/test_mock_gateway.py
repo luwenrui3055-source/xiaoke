@@ -24,6 +24,6 @@ with tempfile.TemporaryDirectory() as directory:
         {"role": "user", "content": "继续"},
     ]
     second = complete(same_window, store, "polaris")
-    assert second["injected"] == []
+    assert second["injected"] == [1, 2, 3]
     assert len(store.records()) == 7
 print("mock-request-flow-ok")

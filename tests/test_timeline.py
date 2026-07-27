@@ -8,21 +8,22 @@ assert needs_handoff(new_window, records) == (True, None)
 bundle = handoff_records(new_window, records, max_records=999)
 assert len(bundle) == 500 and bundle[0].sequence == 1 and bundle[-1].sequence == 500
 
-# Same window: client carries the newest shared anchor, so nothing is added.
+# Same window: client has three conversation records; xiaoke fills only remaining combined-window slots.
 same_window = [{"role": "user", "content": "m499"}, {"role": "assistant", "content": "m500"}, {"role": "user", "content": "continue"}]
 assert needs_handoff(same_window, records) == (False, 500)
-assert handoff_records(same_window, records) == []
+assert [r.sequence for r in handoff_records(same_window, records)] == list(range(1, 499))
 
-# Old window: it knows through r450, so only the later missing segment is selected.
+# Client records use two slots; xiaoke fills the other 997 with absent Timeline records.
 old_window = [{"role": "assistant", "content": "m450"}, {"role": "user", "content": "continue elsewhere"}]
 assert needs_handoff(old_window, records) == (True, 450)
 gap = handoff_records(old_window, records)
-assert [r.sequence for r in gap] == list(range(451, 501))
+assert [r.sequence for r in gap] == list(range(1, 450)) + list(range(451, 501))
 
 # If client history overlaps selected content, it is not copied a second time.
 overlap = [{"role": "assistant", "content": "m450"}, {"role": "user", "content": "m453"}, {"role": "user", "content": "continue"}]
 gap = handoff_records(overlap, records)
 assert 453 not in [r.sequence for r in gap]
+assert len(gap) == 498
 
 # Rule boundary: prompt wrappers are excluded; attachments become text placeholders.
 assert not is_timeline_eligible({"role": "system", "content": "normal SP"})

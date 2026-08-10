@@ -199,7 +199,7 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
         if not isinstance(body, dict) or not isinstance(body.get('messages'), list):
             return jsonify({'error': {'message': 'messages must be a JSON array', 'type': 'invalid_request_error'}}), 400
 
-               messages = body['messages']
+        messages = body['messages']
         user_text = current_user_text(messages)
 
         # 过滤 Kelivo 内部摘要请求

@@ -201,6 +201,15 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
 
         messages = body['messages']
         user_text = current_user_text(messages)
+        # 过滤 Kelivo 内部摘要请求
+if user_text and 'Generate or update a brief summary' in user_text:
+    # 直接转发，不记录
+    if has_upstream():
+        from upstream import forward_non_stream
+        clean_messages = [{k: v for k, v in m.items() if k != 'xiaoke_record_id'} for m in messages]
+        return jsonify(forward_non_stream(clean_messages, str(body.get('model') or 'claude-opus-4-6-thinking'), {}))
+    return jsonify(as_openai_response('[filtered]', 'mock'))
+
         received_at = utcnow()
         if not user_text:
             return jsonify({'error': {'message': 'an eligible current user message is required', 'type': 'invalid_request_error'}}), 400

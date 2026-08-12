@@ -91,14 +91,39 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
             'timeline_records': len(store.records()),
         })
 
-    @app.get('/internal/timeline')
-    def internal_timeline():
-        authorization = request.headers.get("Authorization", "")
-        token = authorization[7:] if authorization.startswith("Bearer ") else ""
-        if required_api_key and not hmac.compare_digest(token, required_api_key):
-            return jsonify({'error': 'unauthorized'}), 401
-        records = store.timeline_export(request.args.get('limit', 100), request.args.get('before'))
-        return jsonify({'records': records, 'next_before': records[0]['sequence'] if records else None})
+   @app.get('/internal/timeline')
+def internal_timeline():
+    authorization = request.headers.get("Authorization", "")
+    token = authorization[7:] if authorization.startswith("Bearer ") else ""
+    if required_api_key and not hmac.compare_digest(token, required_api_key):
+        return jsonify({'error': 'unauthorized'}), 401
+    
+    # 获取原始记录
+    limit = int(request.args.get('limit', 100))
+    all_records = store.timeline_export(limit * 3, request.args.get('before'))  # 多获取一些用于筛选
+    
+    # 只筛选推送记录
+    push_records = []
+    for record in all_records:
+        content = record.get('content', '')
+        role = record.get('role', '')
+        
+        # 识别推送记录的多种格式
+        if (role == 'assistant' and 
+            ('自动唤醒' in content or 
+             '刚刚给用户发了' in content or 
+             '推送' in content or
+             (content.startswith('（') and ('Bark' in content or '推送' in content)))):
+            push_records.append(record)
+    
+    # 返回筛选后的推送记录
+    filtered_records = push_records[-limit:] if len(push_records) > limit else push_records
+    
+    return jsonify({
+        'records': filtered_records, 
+        'next_before': filtered_records[0]['sequence'] if filtered_records else None
+    })
+
 
     @app.get('/internal/timeline/dates')
     def internal_timeline_dates():

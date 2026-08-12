@@ -56,20 +56,14 @@ def timeline_injection_messages(records: list[TimelineRecord]) -> list[dict[str,
     return result
 
 def build_messages(messages: list[dict[str, Any]], store: TimelineStore, session_id: str | None, max_records: int, max_chars: int) -> tuple[list[dict[str, Any]], list[TimelineRecord], bool]:
-    """Build the full message list to send to model.
-    Returns (assembled_messages, baseline_records, is_continuing_session)."""
-    if session_id:
-        if restore_baseline(store, session_id) is not None:
-            baseline = rolling_records(messages, store.records(), max_records, max_chars)
-            systems = [m for m in messages if m.get('role') == 'system']
-            other = [m for m in messages if m.get('role') != 'system']
-            injected = timeline_injection_messages(baseline)
-            return systems + injected + other, baseline, True
-    _, injected = assemble(messages, store, max_records, max_chars)
+    """Build the full message list to send to model."""
+    
+    # 不管是新会话还是继续会话，都不主动注入时间线记录
     systems = [m for m in messages if m.get('role') == 'system']
     other = [m for m in messages if m.get('role') != 'system']
-    return systems + timeline_injection_messages(injected) + other, injected, False
-
+    
+    # 返回原始消息，不注入任何历史记录
+    return systems + other, [], False
 
 def current_user_text(messages: list[dict[str, Any]]) -> str | None:
     for m in reversed(messages):

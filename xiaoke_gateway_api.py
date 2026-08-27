@@ -154,6 +154,30 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
         if required_api_key and not hmac.compare_digest(token,required_api_key): return jsonify({'error':'unauthorized'}),401
         if not store.delete_timeline_record(record_id): return jsonify({'error':'not found'}),404
         return jsonify({'success':True})
+  
+    @app.get('/internal/pushes')
+    def internal_pushes():
+        authorization = request.headers.get("Authorization", "")
+        token = authorization[7:] if authorization.startswith("Bearer ") else ""
+        if required_api_key and not hmac.compare_digest(token, required_api_key):
+            return jsonify({'error': 'unauthorized'}), 401
+
+        limit = min(max(int(request.args.get('limit', 10)), 1), 50)
+        # timeline_export 返回按 sequence 升序（最老到最新）的 500 条
+        all_records = store.timeline_export(500)
+        # 过滤 event 类型，倒序取最新 limit 条
+        pushes = [
+            {
+                'id': r['id'],
+                'time': r['created_at'],
+                'content': r['content'],
+                'sequence': r['sequence'],
+            }
+            for r in reversed(all_records)
+            if r['role'] == 'event'
+        ][:limit]
+
+        return jsonify({'count': len(pushes), 'pushes': pushes})
 
     @app.post('/internal/events')
     def internal_events():

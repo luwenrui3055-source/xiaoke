@@ -4,12 +4,24 @@ from __future__ import annotations
 import json
 import os
 import httpx
+import re
 from typing import Generator
 
 UPSTREAM_URL = os.environ.get('XIAOKE_UPSTREAM_URL', '').strip().rstrip('/')
 UPSTREAM_KEY = os.environ.get('XIAOKE_UPSTREAM_KEY', '').strip()
 UPSTREAM_TIMEOUT = int(os.environ.get('XIAOKE_UPSTREAM_TIMEOUT', '120'))
 
+def fix_rp_format(text: str) -> str:
+    """修正RP场景下的格式问题：在应该分段的地方插入空行"""
+    if not text:
+        return text
+    # 规则1：）（ 之间插入空行
+    text = re.sub(r'）\s*（', '）\n\n（', text)
+    # 规则2：" 后紧跟 （ 插入空行
+    text = re.sub(r'"\s*（', '"\n\n（', text)
+    # 规则3：） 后紧跟 " 插入空行
+    text = re.sub(r'）\s*"', '）\n\n"', text)
+    return text
 
 def upstream_config() -> tuple[str, str, int]:
     """Read xiaoke-specific settings first, then the existing gateway config."""
@@ -49,7 +61,17 @@ def forward_non_stream(messages: list[dict], model: str, request_options: dict |
     with httpx.Client(timeout=upstream_config()[2]) as client:
         resp = client.post(url, json=payload, headers=_headers())
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        # 对每个 choice 的 content 做格式修正
+        try:
+            for choice in data.get('choices', []):
+                msg = choice.get('message', {})
+                if 'content' in msg and msg['content']:
+                    msg['content'] = fix_rp_format(msg['content'])
+        except Exception:
+            pass
+        return data
+
 
 
 def forward_stream(messages: list[dict], model: str, request_options: dict | None = None) -> Generator[tuple[str, bool], None, None]:

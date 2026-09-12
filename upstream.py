@@ -84,14 +84,22 @@ def forward_non_stream(messages: list[dict], model: str, request_options: dict |
 
 
 def forward_stream(messages: list[dict], model: str, request_options: dict | None = None) -> Generator[tuple[str, bool], None, None]:
-    """Forward a streaming request. Yields (sse_event_string, is_done) tuples.
-    
-    Each sse_event_string is ready to send directly to the client.
-    is_done=True on the final [DONE] event.
     """
+    假流式：先收集完整响应，格式化后再逐块 yield。
+    返回 (sse_event_string, is_done) 元组。
+    """
+    import time
+    
     url = chat_completions_url()
     payload = request_payload(messages, model, True, request_options)
-    with httpx.Client(timeout=upstream_config()[2]) as client:
+    _, _, timeout_val = upstream_config()
+    
+    # 1. 收集完整内容
+    full_content = ""
+    finish_reason = "stop"
+    response_id = f"chatcmpl-{int(time.time())}"
+    
+    with httpx.Client(timeout=timeout_val) as client:
         with client.stream('POST', url, json=payload, headers=_headers()) as resp:
             resp.raise_for_status()
             buffer = ''
@@ -100,23 +108,59 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)
                     line = line.strip()
-                    if not line:
+                    if not line or not line.startswith('data:'):
                         continue
-                    if line.startswith('data:'):
-                        event_str = line + '\n\n'
-                        data_part = line[5:].strip()
-                        is_done = (data_part == '[DONE]')
-                        yield event_str, is_done
-                        if is_done:
-                            return
-            # Handle remaining buffer
-            if buffer.strip():
-                line = buffer.strip()
-                if line.startswith('data:'):
-                    event_str = line + '\n\n'
                     data_part = line[5:].strip()
-                    is_done = (data_part == '[DONE]')
-                    yield event_str, is_done
+                    if data_part == '[DONE]':
+                        continue
+                    try:
+                        obj = json.loads(data_part)
+                        if obj.get("id"):
+                            response_id = obj["id"]
+                        choices = obj.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            c = delta.get("content")
+                            if c:
+                                full_content += c
+                            fr = choices[0].get("finish_reason")
+                            if fr:
+                                finish_reason = fr
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+    
+    # 2. 格式化
+    full_content = fix_rp_format(full_content) if full_content else ""
+    
+    # 3. 假流式输出
+    def make_chunk(content_piece: str, finish: str = None) -> str:
+        chunk = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"content": content_piece} if content_piece else {},
+                "finish_reason": finish
+            }]
+        }
+        return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    
+    if full_content:
+        # 按段落切分（双换行）
+        parts = full_content.split('\n\n')
+        for i, part in enumerate(parts):
+            if i > 0:
+                yield make_chunk('\n\n', None), False
+            if part:
+                yield make_chunk(part, None), False
+    
+    # 最后一个 chunk 带 finish_reason
+    yield make_chunk('', finish_reason), False
+    
+    # [DONE] 信号
+    yield "data: [DONE]\n\n", True
 
 
 def extract_stream_content(sse_events: list[str]) -> str:

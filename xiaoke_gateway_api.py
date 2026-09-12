@@ -287,7 +287,7 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
                         return
 
                     if completed:
-                        reply = extract_stream_content(chunks_collected)
+                        reply = extract_stream_content(chunks_collected)or ''
                         if reply.strip():
                             store.completed_turn(user_text, reply, source=source, user_created_at=received_at)
                             if baseline and not continuing:
@@ -306,7 +306,7 @@ def create_app(db_path: str | Path = DEFAULT_DB, max_handoff_records: int | None
                 choices = upstream_response.get('choices', [])
                 reply = ''
                 if choices:
-                    reply = choices[0].get('message', {}).get('content', '')
+                    reply = choices[0].get('message', {}).get('content', '') or ''
 
                 if reply.strip():
                     store.completed_turn(user_text, reply, source=source, user_created_at=received_at)

@@ -130,6 +130,7 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
                         continue
     
     # 2. 格式化
+    print(f"[DEBUG] full_content collected: {repr(full_content)}", flush=True)
     full_content = fix_rp_format(full_content) if full_content else ""
     
     # 3. 假流式输出

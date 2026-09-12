@@ -100,34 +100,33 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
     response_id = f"chatcmpl-{int(time.time())}"
     
     with httpx.Client(timeout=timeout_val) as client:
-        with client.stream('POST', url, json=payload, headers=_headers()) as resp:
-            resp.raise_for_status()
-            buffer = ''
-            for chunk in resp.iter_text():
-                buffer += chunk
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    line = line.strip()
-                    if not line or not line.startswith('data:'):
-                        continue
-                    data_part = line[5:].strip()
-                    if data_part == '[DONE]':
-                        continue
-                    try:
-                        obj = json.loads(data_part)
-                        if obj.get("id"):
-                            response_id = obj["id"]
-                        choices = obj.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            c = delta.get("content")
-                            if c:
-                                full_content += c
-                            fr = choices[0].get("finish_reason")
-                            if fr:
-                                finish_reason = fr
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+      with client.stream('POST', url, json=payload, headers=_headers()) as resp:
+          resp.raise_for_status()
+          buffer = ''
+          for chunk in resp.iter_text():
+              buffer += chunk
+              while '\n' in buffer:
+                  line, buffer = buffer.split('\n', 1)
+                  line = line.strip()
+                  if not line:
+                      continue
+                  print(f"[DEBUG] raw line: {repr(line)}", flush=True)  # 加这行
+                  if not line.startswith('data:'):
+                      continue
+                  data_part = line[5:].strip()
+                  print(f"[DEBUG] data_part: {repr(data_part)}", flush=True)  # 加这行
+                  if data_part == '[DONE]':
+                      continue
+                  try:
+                      obj = json.loads(data_part)
+                      choices = obj.get("choices", [])
+                      if choices:
+                          delta = choices[0].get("delta", {})
+                          c = delta.get("content")
+                          print(f"[DEBUG] delta content: {repr(c)}", flush=True)  # 加这行
+                          if c:
+                              full_content += c
+
     
     # 2. 格式化
     print(f"[DEBUG] full_content collected: {repr(full_content)}", flush=True)

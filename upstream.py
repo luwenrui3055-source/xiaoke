@@ -135,8 +135,10 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
 
     
     # 2. 格式化
-    print(f"[DEBUG] full_content collected: {repr(full_content)}", flush=True)
+    print(f"[DEBUG] BEFORE fix_rp_format: {repr(full_content)}", flush=True)
     full_content = fix_rp_format(full_content) if full_content else ""
+    print(f"[DEBUG] AFTER fix_rp_format: {repr(full_content)}", flush=True)
+
     
     # 3. 假流式输出
     def make_chunk(content_piece: str, finish: str = None) -> str:

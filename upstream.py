@@ -16,19 +16,20 @@ def fix_rp_format(text: str) -> str:
     if not text:
         return text
     
-    # 规则0：字面 \n 转真换行（先做这个，后面才能正确匹配空白）
+    # 规则0：字面 \n 转真换行
     text = text.replace('\\n', '\n')
     
     # 规则1：右括号 后跟 左引号 → 插入空行
-    text = re.sub(r'([)）])[ \t\u200b\u3000]*(["“「])', r'\1\n\n\2', text)
+    text = re.sub(r'([)）])[\s\u200b]*(["“「])', r'\1\n\n\2', text)
     
     # 规则2：右引号 后跟 左括号 → 插入空行
-    text = re.sub(r'(["”」])[ \t\u200b\u3000]*([(（])', r'\1\n\n\2', text)
+    text = re.sub(r'(["”」])[\s\u200b]*([(（])', r'\1\n\n\2', text)
     
-    # 规则3：右括号 后跟 左括号 → 插入空行（允许所有空白，包括已有的换行）
-    text = re.sub(r'([)）])[\s\u200b\u3000]*([(（])', r'\1\n\n\2', text)
+    # 规则3：右括号 后跟 左括号 → 插入空行
+    text = re.sub(r'([)）])[\s\u200b]*([(（])', r'\1\n\n\2', text)
     
     return text
+
 
 
 def upstream_config() -> tuple[str, str, int]:

@@ -86,7 +86,7 @@ def forward_non_stream(messages: list[dict], model: str, request_options: dict |
 def forward_stream(messages: list[dict], model: str, request_options: dict | None = None) -> Generator[tuple[str, bool], None, None]:
     """
     假流式：先收集完整响应，格式化后再逐块 yield。
-    返回 (sse_event_string, is_done) 元组。
+    对 tool_calls 直接透传原始 SSE。
     """
     import time
     
@@ -94,11 +94,13 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
     payload = request_payload(messages, model, True, request_options)
     _, _, timeout_val = upstream_config()
     
-    # 1. 收集完整内容
+    # 收集变量
     full_content = ""
     finish_reason = "stop"
     response_id = f"chatcmpl-{int(time.time())}"
-
+    collected_tool_calls = []  # 存 tool_calls 的 chunk
+    has_tool_calls = False
+    
     with httpx.Client(timeout=timeout_val) as client:
         with client.stream('POST', url, json=payload, headers=_headers()) as resp:
             resp.raise_for_status()
@@ -108,22 +110,24 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)
                     line = line.strip()
-                    if not line:
-                        continue
-                    print(f"[DEBUG] raw line: {repr(line)}", flush=True)
-                    if not line.startswith('data:'):
+                    if not line or not line.startswith('data:'):
                         continue
                     data_part = line[5:].strip()
-                    print(f"[DEBUG] data_part: {repr(data_part)}", flush=True)
                     if data_part == '[DONE]':
                         continue
                     try:
                         obj = json.loads(data_part)
+                        if obj.get("id"):
+                            response_id = obj["id"]
                         choices = obj.get("choices", [])
                         if choices:
                             delta = choices[0].get("delta", {})
+                            # 检查是否有 tool_calls
+                            if delta.get("tool_calls"):
+                                has_tool_calls = True
+                                collected_tool_calls.append(line + '\n\n')
+                            # 收集 content
                             c = delta.get("content")
-                            print(f"[DEBUG] delta content: {repr(c)}", flush=True)
                             if c:
                                 full_content += c
                             fr = choices[0].get("finish_reason")
@@ -131,16 +135,26 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
                                 finish_reason = fr
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
-
-
     
-    # 2. 格式化
-    print(f"[DEBUG] BEFORE fix_rp_format: {repr(full_content)}", flush=True)
+    # 如果是 tool_calls，直接透传原始 SSE（不做格式化）
+    if has_tool_calls:
+        for event in collected_tool_calls:
+            yield event, False
+        # 发送 finish chunk
+        finish_chunk = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]
+        }
+        yield f"data: {json.dumps(finish_chunk, ensure_ascii=False)}\n\n", False
+        yield "data: [DONE]\n\n", True
+        return
+    
+    # 普通文本：格式化后假流式输出
     full_content = fix_rp_format(full_content) if full_content else ""
-    print(f"[DEBUG] AFTER fix_rp_format: {repr(full_content)}", flush=True)
-
     
-    # 3. 假流式输出
     def make_chunk(content_piece: str, finish: str = None) -> str:
         chunk = {
             "id": response_id,
@@ -156,7 +170,6 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
         return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
     
     if full_content:
-        # 按段落切分（双换行）
         parts = full_content.split('\n\n')
         for i, part in enumerate(parts):
             if i > 0:
@@ -164,11 +177,9 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
             if part:
                 yield make_chunk(part, None), False
     
-    # 最后一个 chunk 带 finish_reason
     yield make_chunk('', finish_reason), False
-    
-    # [DONE] 信号
     yield "data: [DONE]\n\n", True
+
 
 
 def extract_stream_content(sse_events: list[str]) -> str:

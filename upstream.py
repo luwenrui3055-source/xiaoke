@@ -36,10 +36,10 @@ def fix_rp_format(text: str) -> str:
     text = text.replace('\\n', '\n')
     
     # 规则1：右括号 后跟 左引号 → 插入空行
-    text = re.sub(r'([)）])[\s\u200b]*([""「])', r'\1\n\n\2', text)
+    text = re.sub(r'([)）])[\s\u200b]*(["“「])', r'\1\n\n\2', text)
     
     # 规则2：右引号 后跟 左括号 → 插入空行
-    text = re.sub(r'([""」])[\s\u200b]*([(（])', r'\1\n\n\2', text)
+    text = re.sub(r'(["”」])[\s\u200b]*([(（])', r'\1\n\n\2', text)
     
     # 规则3：右括号 后跟 左括号 → 插入空行
     text = re.sub(r'([)）])[\s\u200b]*([(（])', r'\1\n\n\2', text)

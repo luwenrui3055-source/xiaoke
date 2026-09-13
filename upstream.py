@@ -11,6 +11,22 @@ UPSTREAM_URL = os.environ.get('XIAOKE_UPSTREAM_URL', '').strip().rstrip('/')
 UPSTREAM_KEY = os.environ.get('XIAOKE_UPSTREAM_KEY', '').strip()
 UPSTREAM_TIMEOUT = int(os.environ.get('XIAOKE_UPSTREAM_TIMEOUT', '120'))
 
+# ====== 全局复用的 Client ======
+_client: httpx.Client | None = None
+
+def get_client() -> httpx.Client:
+    global _client
+    if _client is None:
+        _, _, timeout_val = upstream_config()
+        _client = httpx.Client(
+            timeout=timeout_val,
+            http2=True,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
+    return _client
+# ================================
+
+
 def fix_rp_format(text: str) -> str:
     """修正RP场景下的格式问题：字面\n转真换行，标点之间插入空行"""
     if not text:
@@ -20,16 +36,15 @@ def fix_rp_format(text: str) -> str:
     text = text.replace('\\n', '\n')
     
     # 规则1：右括号 后跟 左引号 → 插入空行
-    text = re.sub(r'([)）])[\s\u200b]*(["“「])', r'\1\n\n\2', text)
+    text = re.sub(r'([)）])[\s\u200b]*([""「])', r'\1\n\n\2', text)
     
     # 规则2：右引号 后跟 左括号 → 插入空行
-    text = re.sub(r'(["”」])[\s\u200b]*([(（])', r'\1\n\n\2', text)
+    text = re.sub(r'([""」])[\s\u200b]*([(（])', r'\1\n\n\2', text)
     
     # 规则3：右括号 后跟 左括号 → 插入空行
     text = re.sub(r'([)）])[\s\u200b]*([(（])', r'\1\n\n\2', text)
     
     return text
-
 
 
 def upstream_config() -> tuple[str, str, int]:
@@ -44,6 +59,7 @@ def chat_completions_url() -> str:
     base_url, _, _ = upstream_config()
     suffix = "/chat/completions" if base_url.endswith("/v1") else "/v1/chat/completions"
     return f"{base_url}{suffix}"
+
 
 def _headers() -> dict[str, str]:
     _, api_key, _ = upstream_config()
@@ -67,20 +83,19 @@ def forward_non_stream(messages: list[dict], model: str, request_options: dict |
     """Forward a non-streaming request to upstream and return the full response."""
     url = chat_completions_url()
     payload = request_payload(messages, model, False, request_options)
-    with httpx.Client(timeout=upstream_config()[2]) as client:
-        resp = client.post(url, json=payload, headers=_headers())
-        resp.raise_for_status()
-        data = resp.json()
-        # 对每个 choice 的 content 做格式修正
-        try:
-            for choice in data.get('choices', []):
-                msg = choice.get('message', {})
-                if 'content' in msg and msg['content']:
-                    msg['content'] = fix_rp_format(msg['content'])
-        except Exception:
-            pass
-        return data
-
+    client = get_client()
+    resp = client.post(url, json=payload, headers=_headers())
+    resp.raise_for_status()
+    data = resp.json()
+    # 对每个 choice 的 content 做格式修正
+    try:
+        for choice in data.get('choices', []):
+            msg = choice.get('message', {})
+            if 'content' in msg and msg['content']:
+                msg['content'] = fix_rp_format(msg['content'])
+    except Exception:
+        pass
+    return data
 
 
 def forward_stream(messages: list[dict], model: str, request_options: dict | None = None) -> Generator[tuple[str, bool], None, None]:
@@ -92,49 +107,48 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
     
     url = chat_completions_url()
     payload = request_payload(messages, model, True, request_options)
-    _, _, timeout_val = upstream_config()
     
     # 收集变量
     full_content = ""
     finish_reason = "stop"
     response_id = f"chatcmpl-{int(time.time())}"
-    collected_tool_calls = []  # 存 tool_calls 的 chunk
+    collected_tool_calls = []
     has_tool_calls = False
     
-    with httpx.Client(timeout=timeout_val) as client:
-        with client.stream('POST', url, json=payload, headers=_headers()) as resp:
-            resp.raise_for_status()
-            buffer = ''
-            for chunk in resp.iter_text():
-                buffer += chunk
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    line = line.strip()
-                    if not line or not line.startswith('data:'):
-                        continue
-                    data_part = line[5:].strip()
-                    if data_part == '[DONE]':
-                        continue
-                    try:
-                        obj = json.loads(data_part)
-                        if obj.get("id"):
-                            response_id = obj["id"]
-                        choices = obj.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            # 检查是否有 tool_calls
-                            if delta.get("tool_calls"):
-                                has_tool_calls = True
-                                collected_tool_calls.append(line + '\n\n')
-                            # 收集 content
-                            c = delta.get("content")
-                            if c:
-                                full_content += c
-                            fr = choices[0].get("finish_reason")
-                            if fr:
-                                finish_reason = fr
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+    client = get_client()
+    with client.stream('POST', url, json=payload, headers=_headers()) as resp:
+        resp.raise_for_status()
+        buffer = ''
+        for chunk in resp.iter_text():
+            buffer += chunk
+            while '\n' in buffer:
+                line, buffer = buffer.split('\n', 1)
+                line = line.strip()
+                if not line or not line.startswith('data:'):
+                    continue
+                data_part = line[5:].strip()
+                if data_part == '[DONE]':
+                    continue
+                try:
+                    obj = json.loads(data_part)
+                    if obj.get("id"):
+                        response_id = obj["id"]
+                    choices = obj.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        # 检查是否有 tool_calls
+                        if delta.get("tool_calls"):
+                            has_tool_calls = True
+                            collected_tool_calls.append(line + '\n\n')
+                        # 收集 content
+                        c = delta.get("content")
+                        if c:
+                            full_content += c
+                        fr = choices[0].get("finish_reason")
+                        if fr:
+                            finish_reason = fr
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
     
     # 如果是 tool_calls，直接透传原始 SSE（不做格式化）
     if has_tool_calls:
@@ -179,7 +193,6 @@ def forward_stream(messages: list[dict], model: str, request_options: dict | Non
     
     yield make_chunk('', finish_reason), False
     yield "data: [DONE]\n\n", True
-
 
 
 def extract_stream_content(sse_events: list[str]) -> str:

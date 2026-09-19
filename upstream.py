@@ -45,7 +45,7 @@ def fix_rp_format(text: str) -> str:
     text = re.sub(r'([)）])[\s\u200b]*([(（])', r'\1\n\n\2', text)
 
     # 规则4：右引号 后跟 左引号 → 插入空行
-    text = re.sub(r'([""」])[\s\u200b]*([""「])', r'\1\n\n\2', text)
+    text = re.sub(r'(["”」])[\s\u200b]*(["“「])', r'\1\n\n\2', text)
     
     return text
 
